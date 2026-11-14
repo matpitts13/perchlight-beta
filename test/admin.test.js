@@ -141,7 +141,7 @@ describe("config check", () => {
     expect(c.betas.filter((b) => b.error)).toEqual([]);
     expect(c.builds.filter((b) => b.error)).toEqual([]);
     expect(c.errors).toEqual([]);
-    expect(c.email).toEqual({ dailyCap: 90, monthlyCap: 2800 });
+    expect(c.email).toEqual({ dailyCap: 90, monthlyCap: 2800, signinReserve: 10 });
     expect(c.screenshots).toEqual({ store: "d1", maxBytes: 400 * 1024, perBug: 2, totalCap: 150 * 1024 * 1024 });
   });
 });

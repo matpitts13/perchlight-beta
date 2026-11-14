@@ -198,32 +198,49 @@ export async function handleBug(request, app, betaId) {
 
   const now = app.now;
   const id = randomId("bug");
-  let note = null;
-  let kept = images;
-  if (images.length) {
-    const used = (await app.db.prepare(`SELECT COALESCE(SUM(size), 0) AS n FROM bug_images WHERE ${sc.store === "r2" ? "r2_key IS NOT NULL" : "data IS NOT NULL"}`).first())?.n ?? 0;
-    const adding = images.reduce((n, i) => n + i.bytes.length, 0);
-    if (used + adding > sc.totalCap || (sc.store === "r2" && !app.env.FILES)) {
-      kept = [];
-      note = "Screenshot storage is full: the report was saved without its screenshots.";
-    }
-  }
+  const FULL = "Screenshot storage is full: the report was saved without its screenshots.";
+  const r2 = sc.store === "r2";
+  let kept = r2 && !app.env.FILES ? [] : images;
+  const usedSql = `SELECT COALESCE(SUM(size), 0) FROM bug_images WHERE ${r2 ? "r2_key IS NOT NULL" : "data IS NOT NULL"}`;
+  const adding = kept.reduce((n, i) => n + i.bytes.length, 0);
+  // R2 objects first (so a row never points at nothing); removed again if the cap or the batch refuses them.
+  const keys = r2 ? kept.map((img, i) => `bugs/${id}/${i + 1}.${EXT[img.mime]}`) : [];
+  for (const [i, img] of kept.entries()) if (r2) await app.env.FILES.put(keys[i], img.bytes, { httpMetadata: { contentType: img.mime } });
   const stmts = [
     app.db
-      .prepare("INSERT INTO bugs (id, tester_id, beta_id, build_id, title, body, severity, platform, status, images, images_note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?)")
-      .bind(id, t.id, beta.id, build?.id ?? null, title, body, severity, platform || null, kept.length, note, now),
-    app.db.prepare("INSERT INTO events (id, tester_id, beta_id, kind, at, detail) VALUES (?, ?, ?, 'bug', ?, ?)").bind(randomId("e"), t.id, beta.id, now, JSON.stringify({ bug: id, images_dropped: note ? images.length : 0 })),
+      .prepare("INSERT INTO bugs (id, tester_id, beta_id, build_id, title, body, severity, platform, status, images, images_note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', 0, ?, ?)")
+      .bind(id, t.id, beta.id, build?.id ?? null, title, body, severity, platform || null, images.length && !kept.length ? FULL : null, now),
   ];
+  // The cap check and the insert are one statement per image, inside one batch (D1 runs a batch
+  // as one transaction), so concurrent reports can't both squeeze past the cap. All images or none.
   for (const [i, img] of kept.entries()) {
-    if (sc.store === "r2") {
-      const key = `bugs/${id}/${i + 1}.${EXT[img.mime]}`;
-      await app.env.FILES.put(key, img.bytes, { httpMetadata: { contentType: img.mime } });
-      stmts.push(app.db.prepare("INSERT INTO bug_images (bug_id, n, mime, size, r2_key) VALUES (?, ?, ?, ?, ?)").bind(id, i + 1, img.mime, img.bytes.length, key));
-    } else {
-      stmts.push(app.db.prepare("INSERT INTO bug_images (bug_id, n, mime, size, data) VALUES (?, ?, ?, ?, ?)").bind(id, i + 1, img.mime, img.bytes.length, img.bytes));
-    }
+    stmts.push(
+      app.db
+        .prepare(
+          `INSERT INTO bug_images (bug_id, n, mime, size, data, r2_key) SELECT ?, ?, ?, ?, ?, ? WHERE ${i === 0 ? `(${usedSql}) + ? <= ?` : "EXISTS (SELECT 1 FROM bug_images WHERE bug_id = ? AND n = 1)"}`,
+        )
+        .bind(id, i + 1, img.mime, img.bytes.length, r2 ? null : img.bytes, r2 ? keys[i] : null, ...(i === 0 ? [adding, sc.totalCap] : [id])),
+    );
   }
-  await app.db.batch(stmts);
+  stmts.push(
+    app.db
+      .prepare("UPDATE bugs SET images = (SELECT COUNT(*) FROM bug_images WHERE bug_id = ?), images_note = CASE WHEN ? > 0 AND NOT EXISTS (SELECT 1 FROM bug_images WHERE bug_id = ?) THEN ? ELSE images_note END WHERE id = ? RETURNING images")
+      .bind(id, kept.length, id, FULL, id),
+  );
+  let stored;
+  try {
+    const res = await app.db.batch(stmts);
+    stored = res[res.length - 1].results[0]?.images ?? 0;
+  } catch (err) {
+    if (keys.length) await app.env.FILES.delete(keys).catch(() => {});
+    throw err;
+  }
+  if (r2 && stored === 0 && keys.length) await app.env.FILES.delete(keys).catch(() => {});
+  const note = images.length && stored === 0 ? FULL : null;
+  await app.db
+    .prepare("INSERT INTO events (id, tester_id, beta_id, kind, at, detail) VALUES (?, ?, ?, 'bug', ?, ?)")
+    .bind(randomId("e"), t.id, beta.id, now, JSON.stringify({ bug: id, images_dropped: note ? images.length : 0 }))
+    .run();
   return page("Bug report", `<h1>Thanks</h1><p>Your bug report was saved.</p>${note ? `<p class="err">${e(note)}</p>` : ""}<p><a href="/t/${e(beta.id)}">Back to your tester page</a></p>`);
 }
 

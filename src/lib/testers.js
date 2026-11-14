@@ -109,6 +109,8 @@ export async function decide(app, ids, action) {
     const m = marks(part.length);
     if (action === "approve") {
       const rows = (await db.prepare(`SELECT id, beta_id, status FROM testers WHERE id IN (${m})`).bind(...part).all()).results;
+      // In the order asked for: when maxTesters is near, the first ids get the places.
+      rows.sort((a, b) => part.indexOf(a.id) - part.indexOf(b.id));
       const byBeta = new Map();
       for (const r of rows) if (UNDECIDED.includes(r.status) && app.cfg.byId.has(r.beta_id)) byBeta.set(r.beta_id, [...(byBeta.get(r.beta_id) ?? []), r.id]);
       for (const [betaId, list] of byBeta) {

@@ -116,7 +116,7 @@ describe("apply", () => {
   it("sets the security headers on pages", async () => {
     const r = await get("/b/alpha");
     expect(r.headers.get("X-Frame-Options")).toBe("DENY");
-    expect(r.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(r.headers.get("Referrer-Policy")).toBe("same-origin");
     const csp = r.headers.get("Content-Security-Policy");
     expect(csp).toContain("script-src https://challenges.cloudflare.com");
     expect(csp).toContain("frame-ancestors 'none'");

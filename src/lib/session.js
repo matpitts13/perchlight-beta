@@ -77,13 +77,18 @@ export async function checkCsrf(app, scope, value) {
   return safeEqual(await csrfFor(app, scope), value);
 }
 
-/** A state-changing request must come from this deployment's own pages. */
+/**
+ * A state-changing request must come from this deployment's own pages: Origin equal to
+ * PUBLIC_URL's origin, or (when a browser sends no Origin or "null") Sec-Fetch-Site: same-origin.
+ */
 export function sameOrigin(app, request) {
   const origin = request.headers.get("Origin");
-  if (!origin) return false;
-  try {
-    return origin === new URL(app.base).origin;
-  } catch {
-    return false;
+  if (origin && origin !== "null") {
+    try {
+      return origin === new URL(app.base).origin;
+    } catch {
+      return false;
+    }
   }
+  return request.headers.get("Sec-Fetch-Site") === "same-origin";
 }

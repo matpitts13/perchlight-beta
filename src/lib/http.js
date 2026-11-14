@@ -45,7 +45,9 @@ export function pageHeaders({ scriptHashes = [], turnstile = false } = {}) {
     "Cache-Control": "no-store",
     "Content-Security-Policy": csp,
     "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
+    // same-origin, not no-referrer: under no-referrer browsers send "Origin: null" on form POSTs,
+    // which the Origin check would refuse. Cross-origin requests still get no Referer.
+    "Referrer-Policy": "same-origin",
     "X-Content-Type-Options": "nosniff",
   };
 }

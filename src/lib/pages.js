@@ -41,7 +41,7 @@ export const THANKS_TEXT = "Thanks, we'll be in touch. If you're chosen for the 
 export const NOT_OPEN_TEXT = "This beta isn't taking applications right now.";
 export const INVITE_DEAD_TEXT = "This invite link doesn't work any more. If you were invited, sign in or ask for a new link.";
 export const DOWNLOAD_DENIED_TEXT = "This download link has expired or isn't yours. Open your tester page for a fresh one.";
-export const SIGNIN_SENT_TEXT = "If that address belongs to a tester of this beta, a sign-in link is on its way. It works once, for 30 minutes. If your email hasn't arrived, it may come after 00:00 UTC.";
+export const SIGNIN_SENT_TEXT = "If that address belongs to a tester of this beta, a sign-in link is on its way. It works once, for 30 minutes. If it hasn't arrived in a few minutes, try again later.";
 export const SIGNIN_DEAD_TEXT = "This sign-in link doesn't work any more. Ask for a new one.";
 
 export function thanksPage(asJson) {

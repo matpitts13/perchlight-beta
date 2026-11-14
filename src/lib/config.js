@@ -5,6 +5,7 @@ import { checkTarget } from "./ssrf.js";
 
 export const MAX_BETAS = 10;
 export const MAX_QUESTIONS = 20;
+export const MAX_BUILDS = 100;
 export const QUESTION_TYPES = ["text", "longtext", "choice", "multi", "checkbox", "number"];
 export const SURVEY_TYPES = [...QUESTION_TYPES, "rating"];
 export const BETA_TYPES = ["game", "app", "book"];
@@ -301,7 +302,13 @@ export function checkConfig(raw, { terms = {}, ownHost = null } = {}) {
   }
 
   const builds = [];
-  for (const [id, b] of Object.entries(raw?.builds ?? {})) {
+  const rawBuilds = Object.entries(raw?.builds ?? {});
+  if (rawBuilds.length > MAX_BUILDS) errors.push(`at most ${MAX_BUILDS} builds in beta.json; the rest are switched off (add more with POST /api/builds)`);
+  for (const [i, [id, b]] of rawBuilds.entries()) {
+    if (i >= MAX_BUILDS) {
+      builds.push({ id, beta: null, error: `over the ${MAX_BUILDS}-build limit` });
+      continue;
+    }
     const r = checkBuild(id, b, { betaIds: new Set(byId.keys()), surveys, ownHost });
     builds.push(r.error ? { id, beta: b?.beta ?? null, error: r.error } : { ...r.build, error: null });
   }
@@ -309,7 +316,10 @@ export function checkConfig(raw, { terms = {}, ownHost = null } = {}) {
   const em = raw?.email ?? {};
   const dailyCap = int(em.dailyCap, 90, 1, 100000);
   const monthlyCap = int(em.monthlyCap, 2800, 1, 3_000_000);
-  if (Number.isNaN(dailyCap) || Number.isNaN(monthlyCap)) errors.push("email caps must be positive integers; using 90 / 2800");
+  let signinReserve = int(em.signinReserve, 10, 0, 1000);
+  if (Number.isNaN(dailyCap) || Number.isNaN(monthlyCap) || Number.isNaN(signinReserve)) errors.push("email caps must be positive integers; using 90 / 2800 / 10");
+  if (Number.isNaN(signinReserve)) signinReserve = 10;
+  if ((Number.isNaN(dailyCap) ? 90 : dailyCap) + signinReserve > 100) errors.push("email.dailyCap + email.signinReserve is above Resend's free 100 a day");
   if (dailyCap > 100 || monthlyCap > 3000) errors.push("email caps are above Resend's free plan (100 a day, 3,000 a month)");
   const sc = raw?.screenshots ?? {};
   const store = sc.store ?? "d1";
@@ -326,7 +336,7 @@ export function checkConfig(raw, { terms = {}, ownHost = null } = {}) {
     buildById: new Map(builds.filter((b) => !b.error).map((b) => [b.id, b])),
     surveys,
     surveyErrors,
-    email: { dailyCap: Number.isNaN(dailyCap) ? 90 : dailyCap, monthlyCap: Number.isNaN(monthlyCap) ? 2800 : monthlyCap },
+    email: { dailyCap: Number.isNaN(dailyCap) ? 90 : dailyCap, monthlyCap: Number.isNaN(monthlyCap) ? 2800 : monthlyCap, signinReserve },
     screenshots: scBad ? { store: "d1", maxBytes: 400 * 1024, perBug: 2, totalCap: 150 * 1024 ** 2 } : { store, maxBytes, perBug, totalCap },
     errors,
   };

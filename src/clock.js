@@ -18,7 +18,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { EmailMessage } from "cloudflare:email";
 import { makeApp, testHooks, termsSha } from "./lib/appctx.js";
-import { newBudget, MAX_EMAILS_PER_RUN } from "./lib/budget.js";
+import { newBudget, spend, MAX_EMAILS_PER_RUN } from "./lib/budget.js";
 import { compose } from "./lib/emails.js";
 import { getSender } from "./lib/mail/index.js";
 import { capLeft, addCount, nextRetryAt, tomorrow, EMAIL_KINDS, STALE_CLAIM_MS, PRIORITY } from "./lib/queue.js";
@@ -36,6 +36,7 @@ export const MAX_BACKOFF_MS = HOUR;
 export const NOTICE_MS = 30 * MIN;
 export const HOUSEKEEPING_MS = HOUR;
 const DELETE_LIMIT = 100;
+export const SYNC_CHUNK = 20;
 const SEND_CONCURRENCY = 5;
 const errText = (err) => (err instanceof Error ? err.message : String(err));
 const newId = (p) => `'${p}_' || lower(hex(randomblob(10)))`;
@@ -192,8 +193,18 @@ export function clockClass(rawConfig, terms = {}) {
       await this.run(Date.now());
     }
 
-    /** One run at `now`. */
+    /** One run at `now`. Runs never overlap (an RPC run and the alarm would both read the cap). */
     async run(now = Date.now()) {
+      if (this.running) return { skipped: true, reason: "a run is already in progress" };
+      this.running = true;
+      try {
+        return await this.runOnce(now);
+      } finally {
+        this.running = false;
+      }
+    }
+
+    async runOnce(now) {
       const h = this.load(now);
       this.wakeAt = undefined;
       await this.setAlarmAt(now + IDLE_MS);
@@ -201,39 +212,51 @@ export function clockClass(rawConfig, terms = {}) {
       const app = makeApp(rawConfig, terms, this.env, { now: () => now });
       const realDb = app.db;
       app.db = countingDb(realDb, budget, h.fp);
-      const out = { synced: false, actions: 0, sent: 0, keys: 0, reminders: 0, expired: 0, deleted: 0, notice: false, leftover: false, error: null };
+      const out = { synced: false, actions: 0, sent: 0, keys: 0, reminders: 0, expired: 0, deleted: 0, notice: false, leftover: false, error: null, subrequests: 0 };
       h.fp.runs++;
-      try {
-        if (!app.db || !realDb) throw new Error("the DB binding is missing");
-        await this.syncConfig(app, h, out);
-        await this.applyActions(app, out, budget);
-        await this.sendDue(app, out, budget);
-        await this.keysWork(app, out, budget);
-        if (budget.left >= 6) await this.reminders(app, out);
-        if (budget.left >= 5) await this.housekeeping(app, h, out, budget);
-        if (budget.left >= 3) await this.ownerNotice(app, h, out);
+      // Each step is isolated: a failure in one (say a config sync D1 refuses) never starves the email queue.
+      const errors = [];
+      const step = async (name, fn) => {
+        try {
+          await fn();
+        } catch (err) {
+          errors.push(`${name}: ${errText(err)}`);
+        }
+      };
+      if (!realDb) errors.push("the DB binding is missing");
+      else {
+        await step("sync", () => this.syncConfig(app, h, out));
+        await step("actions", () => this.applyActions(app, out, budget));
+        await step("email", () => this.sendDue(app, out, budget));
+        await step("keys", () => this.keysWork(app, out, budget));
+        if (budget.left >= 6) await step("reminders", () => this.reminders(app, out));
+        if (budget.left >= 5) await step("housekeeping", () => this.housekeeping(app, h, out, budget));
+        if (budget.left >= 3) await step("notice", () => this.ownerNotice(app, h, out, budget));
+      }
+      if (errors.length) {
+        h.failures = (h.failures ?? 0) + 1;
+        h.lastError = errors.join("; ").slice(0, 300);
+        out.error = h.lastError;
+        out.leftover = false;
+        console.error(`clock run: ${h.lastError}`);
+      } else {
         h.failures = 0;
         h.lastError = null;
-      } catch (err) {
-        h.failures = (h.failures ?? 0) + 1;
-        h.lastError = errText(err).slice(0, 300);
-        out.error = h.lastError;
-        console.error(`clock run: ${h.lastError}`);
-      } finally {
-        h.lastRunAt = now;
-        h.fp.subrequests += budget.used;
-        let next = now + IDLE_MS;
-        if (h.failures > 0) next = now + Math.min(IDLE_MS * 2 ** Math.min(h.failures - 1, 4), MAX_BACKOFF_MS);
-        else if (out.leftover) next = now + 2000;
-        if (this.wakeAt && this.wakeAt < next) next = Math.max(this.wakeAt, now + 1000);
-        try {
-          this.persist();
-        } catch (err) {
-          console.error(`clock persist: ${errText(err)}`);
-        }
-        if (next !== this.alarmAt) await this.setAlarmAt(next);
-        out.nextAt = next;
       }
+      h.lastRunAt = now;
+      h.fp.subrequests += budget.used;
+      out.subrequests = budget.used;
+      let next = now + IDLE_MS;
+      if (h.failures > 0) next = now + Math.min(IDLE_MS * 2 ** Math.min(h.failures - 1, 4), MAX_BACKOFF_MS);
+      else if (out.leftover) next = now + 2000;
+      if (this.wakeAt && this.wakeAt < next) next = Math.max(this.wakeAt, now + 1000);
+      try {
+        this.persist();
+      } catch (err) {
+        console.error(`clock persist: ${errText(err)}`);
+      }
+      if (next !== this.alarmAt) await this.setAlarmAt(next);
+      out.nextAt = next;
       return out;
     }
 
@@ -293,12 +316,24 @@ export function clockClass(rawConfig, terms = {}) {
       const ids = cfg.builds.map((b) => b.id);
       stmts.push(
         app.db
-          .prepare(`UPDATE builds SET config_error = 'removed from beta.json' WHERE origin = 'config' ${ids.length ? `AND id NOT IN (${ids.map(() => "?").join(",")})` : ""}`)
-          .bind(...ids),
+          .prepare("UPDATE builds SET config_error = 'removed from beta.json' WHERE origin = 'config' AND id NOT IN (SELECT value FROM json_each(?))")
+          .bind(JSON.stringify(ids)),
       );
-      await app.db.batch(stmts);
-      h.cfgHash = hash;
-      out.synced = true;
+      // At most SYNC_CHUNK statements a run (D1 statements per invocation are limited); the rest follow 2 s later.
+      if (h.syncHash !== hash) {
+        h.syncHash = hash;
+        h.syncCursor = 0;
+      }
+      const from = h.syncCursor ?? 0;
+      await app.db.batch(stmts.slice(from, from + SYNC_CHUNK));
+      if (from + SYNC_CHUNK >= stmts.length) {
+        h.cfgHash = hash;
+        h.syncCursor = 0;
+        out.synced = true;
+      } else {
+        h.syncCursor = from + SYNC_CHUNK;
+        out.leftover = true;
+      }
     }
 
     async applyActions(app, out, budget) {
@@ -313,20 +348,27 @@ export function clockClass(rawConfig, terms = {}) {
       for (const [action, ids] of byAction) {
         if (budget.left < 12) break;
         if (["approve", "decline", "waitlist", "block", "revoke", "resend_invite"].includes(action)) await decide(app, ids, action);
-        else await app.db.prepare(`UPDATE testers SET action_requested = NULL WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).run();
+        else await app.db.prepare("UPDATE testers SET action_requested = NULL WHERE id IN (SELECT value FROM json_each(?))").bind(JSON.stringify(ids)).run();
         out.actions += ids.length;
       }
       const stmts = [];
-      for (const b of bugs) {
-        const ok = ["new", "triaged", "fixed", "wontfix", "duplicate"].includes(b.action_requested);
-        stmts.push(app.db.prepare(`UPDATE bugs SET ${ok ? "status = ?, " : ""}action_requested = NULL WHERE id = ?`).bind(...(ok ? [b.action_requested, b.id] : [b.id])));
-      }
-      if (dels.length) {
-        const m = dels.map(() => "?").join(",");
+      if (bugs.length) {
+        // One statement for all of them: the new status is the requested one when it's valid.
         stmts.push(
           app.db
-            .prepare(`UPDATE deliveries SET status = CASE WHEN status IN ('failed','retry') THEN 'pending' ELSE status END, next_at = ?, not_before_day = NULL, action_requested = NULL WHERE id IN (${m})`)
-            .bind(app.now, ...dels.map((d) => d.id)),
+            .prepare(
+              "UPDATE bugs SET status = CASE WHEN action_requested IN ('new','triaged','fixed','wontfix','duplicate') THEN action_requested ELSE status END, action_requested = NULL WHERE id IN (SELECT value FROM json_each(?))",
+            )
+            .bind(JSON.stringify(bugs.map((b) => b.id))),
+        );
+      }
+      if (dels.length) {
+        stmts.push(
+          app.db
+            .prepare(
+              "UPDATE deliveries SET status = CASE WHEN status IN ('failed','retry') THEN 'pending' ELSE status END, next_at = ?, not_before_day = NULL, action_requested = NULL WHERE id IN (SELECT value FROM json_each(?))",
+            )
+            .bind(app.now, JSON.stringify(dels.map((d) => d.id))),
         );
       }
       if (stmts.length) await app.db.batch(stmts);
@@ -339,42 +381,53 @@ export function clockClass(rawConfig, terms = {}) {
       const now = app.now;
       const today = utcDay(now);
       const caps = app.cfg.email;
-      const left = capLeft(this.counts(now), caps, now);
+      const counts = this.counts(now);
+      const left = capLeft(counts, caps, now);
+      // Sign-in links may also use a small reserve above the cap (they expire in 30 minutes, so
+      // they're never postponed to tomorrow); everything else stops at the cap.
+      const r = app.cfg.email.signinReserve;
+      const leftSignin = capLeft(counts, { dailyCap: caps.dailyCap + r, monthlyCap: caps.monthlyCap + r }, now);
       const kinds = [...EMAIL_KINDS];
       const km = kinds.map(() => "?").join(",");
-      // Room in this run: the cap, 30 emails, and the budget less what the later steps need.
-      const room = Math.min(left, MAX_EMAILS_PER_RUN, budget.left - 10);
+      const later = kinds.filter((k) => k !== "signin");
+      const lm = later.map(() => "?").join(",");
+      // Room in this run: the caps, 30 emails, and the budget less what the later steps need.
+      const room = Math.min(Math.max(left, leftSignin), MAX_EMAILS_PER_RUN, budget.left - 12);
       const res = await app.db.batch([
         // Interrupted claims are retried (same Resend idempotency key, safe).
         app.db.prepare(`UPDATE deliveries SET status = 'retry', next_at = ? WHERE status = 'sending' AND claimed_at < ? AND kind IN (${km})`).bind(now, now - STALE_CLAIM_MS, ...kinds),
-        // A full cap: what's due waits for the next UTC day (shown in the app).
+        // A full cap: what's due (except sign-in links) waits for the next UTC day (shown in the app).
         left <= 0
           ? app.db
-              .prepare(`UPDATE deliveries SET not_before_day = ? WHERE status IN ('pending','retry') AND kind IN (${km}) AND (not_before_day IS NULL OR not_before_day <= ?)`)
-              .bind(tomorrow(now), ...kinds, today)
+              .prepare(`UPDATE deliveries SET not_before_day = ? WHERE status IN ('pending','retry') AND kind IN (${lm}) AND (not_before_day IS NULL OR not_before_day <= ?)`)
+              .bind(tomorrow(now), ...later, today)
           : app.db.prepare("SELECT 1"),
         app.db
           .prepare(
             `SELECT d.id, d.kind, d.ref, d.attempts, d.beta_id, t.id AS tid, t.email, t.name, t.status AS tstatus, t.reminders_off,
                i.status AS istatus, i.expires_at AS iexpires, s.used_at AS sused, s.expires_at AS sexpires, b.label AS blabel
              FROM deliveries d LEFT JOIN testers t ON t.id = d.tester_id LEFT JOIN invites i ON i.id = d.ref LEFT JOIN signins s ON s.id = d.ref LEFT JOIN builds b ON b.id = d.ref
-             WHERE d.status IN ('pending','retry') AND d.kind IN (${km}) AND d.next_at <= ? AND (d.not_before_day IS NULL OR d.not_before_day <= ?)
+             WHERE d.status IN ('pending','retry') AND d.kind IN (${left > 0 ? km : "'signin'"}) AND d.next_at <= ? AND (d.not_before_day IS NULL OR d.not_before_day <= ?)
              ORDER BY d.priority, d.created_at LIMIT ?`,
           )
-          .bind(...kinds, now, today, Math.max(0, room) + 1),
+          .bind(...(left > 0 ? kinds : []), now, today, Math.max(0, room) + 1),
       ]);
-      if (room <= 0) {
-        out.leftover = false;
-        return;
+      if (room <= 0) return;
+      // Sign-ins first (priority order), then the rest while the plain cap allows.
+      let due = [];
+      let others = 0;
+      for (const d of res[2].results) {
+        if (due.length >= room) break;
+        if (d.kind !== "signin") {
+          if (others >= left) continue;
+          others++;
+        }
+        due.push(d);
       }
-      let due = res[2].results;
-      if (due.length > room) {
-        out.leftover = true;
-        due = due.slice(0, room);
-      }
+      const more = res[2].results.length > room && due.length >= room;
       if (!due.length) return;
       const sender = getSender(this.env);
-      if (!sender) return; // email isn't set up: deliveries wait (the config check says so)
+      if (!sender) return; // email isn't set up: deliveries wait (the config check says so); no fast follow-up run
 
       const valid = [];
       const dropped = [];
@@ -405,6 +458,8 @@ export function clockClass(rawConfig, terms = {}) {
       if (!claimed.length) return;
       // Claimed before sending: the counts go up first, so a crash can't exceed the cap.
       this.bump(now, claimed.length);
+      spend(budget, claimed.length); // one Resend request each
+      out.leftover = out.leftover || more;
       let stop = null; // "throttled" | "config": the rest of this run isn't sent
       const results = await pool(claimed, SEND_CONCURRENCY, async (d) => {
         if (stop) return { d, r: { status: "skipped" } };
@@ -440,6 +495,9 @@ export function clockClass(rawConfig, terms = {}) {
         notSent++;
         if (r.status === "skipped") {
           done.push(app.db.prepare("UPDATE deliveries SET status = 'pending', attempts = attempts - 1 WHERE id = ?").bind(d.id));
+        } else if (r.status === "throttled" && d.kind === "signin") {
+          throttled = true;
+          done.push(app.db.prepare("UPDATE deliveries SET status = 'failed', last_error = ? WHERE id = ?").bind(err, d.id));
         } else if (r.status === "throttled") {
           throttled = true;
           done.push(app.db.prepare("UPDATE deliveries SET status = 'pending', attempts = attempts - 1, not_before_day = ?, last_error = ? WHERE id = ?").bind(tomorrow(now), err, d.id));
@@ -518,6 +576,7 @@ export function clockClass(rawConfig, terms = {}) {
       }
       const claim = await app.db.prepare("UPDATE deliveries SET status = 'sending', attempts = attempts + 1, claimed_at = ? WHERE id = ? AND status IN ('pending','retry','sending') RETURNING attempts").bind(now, d.id).first();
       if (!claim) return;
+      spend(budget, 1);
       out.keys++;
       this.hot.fp.keysCalls++;
       const r = d.kind === "key_issue" ? await issueKey(app.env, { beta, tester: { id: d.tester_id, email: d.email, name: d.name } }) : await revokeKey(app.env, d.ref);
@@ -671,11 +730,11 @@ export function clockClass(rawConfig, terms = {}) {
         const beta = app.cfg.byId.get(betaId);
         const d = await deleteTesters(app, ids, { keepBugs: beta.keepBugs, acceptanceDays: beta.retention.acceptanceDays });
         out.deleted += d.deleted;
-        if (d.r2Keys.length && app.env.FILES) await app.env.FILES.delete(d.r2Keys).catch(() => {});
+        if (d.r2Keys.length && app.env.FILES && spend(budget, 1)) await app.env.FILES.delete(d.r2Keys).catch(() => {});
       }
     }
 
-    async ownerNotice(app, h, out) {
+    async ownerNotice(app, h, out, budget) {
       const now = app.now;
       if (now - (h.noticeAt ?? 0) < NOTICE_MS) return;
       const rows = (
@@ -691,6 +750,7 @@ export function clockClass(rawConfig, terms = {}) {
       const to = String(env.OWNER_EMAIL ?? "").trim();
       const from = String(env.MAIL_FROM ?? "").trim();
       if (!to || !from || !env.EMAIL || typeof env.EMAIL.send !== "function") return;
+      if (!spend(budget, 1)) return;
       const label = { applied: "new applications", bug: "new bug reports", upstream_error: "builds temporarily unavailable" };
       const lines = rows.map((r) => `${app.cfg.byId.get(r.beta_id)?.name ?? r.beta_id}: ${r.n} ${label[r.kind]}`);
       const text = `${lines.join("\n")}\n\nOpen the Perchlight app or GET ${app.base}/api/dashboard for details.`;

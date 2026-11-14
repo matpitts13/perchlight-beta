@@ -90,7 +90,7 @@ Never commit `.dev.vars`; `.dev.vars.example` lists every secret. For local runs
 
 All timed work runs on the `Clock` Durable Object's alarm, every 5 minutes (sooner when a sign-in link is waiting). One run sets its next alarm first, then applies the desktop app's actions, sends due email, makes one perchlight-keys call, queues reminders, expires invites, runs retention (hourly) and sends owner notices, and writes its state to its SQLite every run. Persistent failures back off (5, 10, 20, 40, then 60 minutes). Any request and `GET /tick` re-arm the alarm if it stopped.
 
-**Email is the binding limit.** Resend's free plan allows 100 a day and 3,000 a month; the defaults (`dailyCap` 90, `monthlyCap` 2,800) leave room for tests and for perchlight-keys if both share one Resend account. Only `Clock` sends, at most 30 a run, in this order: sign-in links, invites, new-build notices, reminders. What doesn't fit waits for the next UTC day: inviting 150 people takes 2 days, and `POST /api/applications/decide` says so ("150 invites: sent over 2 days"). Every send is claimed first and uses a Resend idempotency key, so the alarm running twice never sends twice.
+**Email is the binding limit.** Resend's free plan allows 100 a day and 3,000 a month; the defaults (`dailyCap` 90, `monthlyCap` 2,800) leave room for tests and for perchlight-keys if both share one Resend account. Only `Clock` sends, at most 30 a run, in this order: sign-in links, invites, new-build notices, reminders. Sign-in links expire in 30 minutes, so they may also use a small reserve above the cap (`email.signinReserve`, 10; `dailyCap` + reserve must stay within 100). Everything else that doesn't fit waits for the next UTC day: inviting 150 people takes 2 days, and `POST /api/applications/decide` says so ("150 invites: sent over 2 days"). Every send is claimed first and uses a Resend idempotency key, so the alarm running twice never sends twice.
 
 **Reminders** (each can be turned off per beta; each tester can turn them all off): an invite unclaimed after 5 days, a new build, a survey with no answer 3 days after a download, and a beta ending in 3 days. Each is queued once (a unique key per occurrence).
 
@@ -122,7 +122,7 @@ All timed work runs on the `Clock` Durable Object's alarm, every 5 minutes (soon
 ## Security notes
 
 - Tokens (invites, sign-in links) are looked up by SHA-256, never compared byte by byte. The admin token, CSRF values, download signatures and session cookies are compared in constant time (hash-then-compare or `crypto.subtle.verify`).
-- Every state-changing form checks `Origin` against `PUBLIC_URL`, and tester forms carry a per-session CSRF value. Pages set a Content-Security-Policy (no inline script except the screenshot shrinker, by hash, and Turnstile), `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.
+- Every state-changing form checks `Origin` against `PUBLIC_URL`, and tester forms carry a per-session CSRF value. Pages set a Content-Security-Policy (no inline script except the screenshot shrinker, by hash, and Turnstile), `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` (no `Referer` leaves the site; `no-referrer` would make browsers send `Origin: null` on form posts). Redirects carry `no-referrer`.
 - Size limits: name 100, email 254, answers as configured, JSON or form bodies 32 KB, bug forms 900 KB, URLs 2 KB; bodies over the limit are refused before they're read.
 - Every SQL statement is parameterised. The only owner-configured URL the Worker fetches is `KEYS_URL` (checked with perchlight-hooks' SSRF rules, redirects not followed); a service binding is preferred and required by default. GitHub, Resend and Turnstile hosts are fixed.
 
@@ -136,7 +136,7 @@ Nothing inside the free plans (Workers Free, D1 Free, Durable Objects Free with 
 
 ## Tested, and not tested
 
-- **`npm test`: 103 tests** with vitest and the Workers pool. D1, the `Clock` Durable Object and R2 run for real in Miniflare; Resend, GitHub, Turnstile and perchlight-keys are stubbed. They cover:
+- **`npm test`: 111 tests** with vitest and the Workers pool. D1, the `Clock` Durable Object and R2 run for real in Miniflare; Resend, GitHub, Turnstile and perchlight-keys are stubbed. They cover:
   - apply: byte-identical answers for new / repeat / closed-beta waitlist / blocked; one row with the latest answers; Turnstile missing, failed or unreachable (nothing stored); honeypot; validation; 32 KB and 2 KB limits; 5 an hour per IP; `?src=` allow-list; draft and unknown betas; D1 refusing the write (503); page security headers
   - approve and invite: an app action applied by `Clock` sends exactly one invite; `GET` ten times changes nothing; one claim wins, a second gets the uniform page (or `/t` with the winner's session); three concurrent claims → one; expired, revoked, unknown and malformed tokens → one page; re-send replaces the token; changed terms → nothing claimed; Origin, CSRF and acceptance checks; manual invites; `maxTesters` → waitlist; bulk decisions
   - NDA: the acceptance row (tester, version, SHA-256 of the exact text, typed name, time); re-acceptance after a version change; the log is append-only (D1 triggers)
@@ -147,6 +147,7 @@ Nothing inside the free plans (Workers Free, D1 Free, Durable Objects Free with 
   - `Clock`: alarm set first, hot state persisted every run and reloaded, backoff 5/10/20/40/60 minutes on persistent failures, `ensureAlarm`, grouped owner notices
   - privacy: export of every row across betas; delete leaving only the pseudonymised acceptance (removed after 730 days); admin export/delete; withdraw; retention of declined, blocked and closed-beta testers
   - sessions: tampered, re-versioned and expired cookies; `last_seen_day` once a day; sign-in always 202, single use, 30 minutes, 1 per 10 minutes per email, Turnstile; Origin and CSRF on tester forms; revoke → next request to sign-in, sign-in sends nothing
+  - review regressions: forms accepted with `Origin: null` plus `Sec-Fetch-Site: same-origin` (and pages use `Referrer-Policy: same-origin`); no 2-second loop when email isn't configured; 150 app actions within D1's parameter limit; at most 100 builds; emails counted in the run budget; runs never overlap; sign-in links sent from a reserve when the cap is used up; concurrent bug reports held under the screenshot cap
   - admin auth (wrong, missing, short token); dashboard; footprint under 2,000 rows written; builds API; deliveries; the config check (10-beta limit, one bad beta or build switched off) and the shipped `beta.json`; perchlight-hooks' SSRF rules
 - **Not tested:**
   - **perchlight-keys for real.** Beta codes against perchlight-keys' documented admin API (`POST /api/licenses`, `POST /api/licenses/:id/revoke`) through a stubbed service binding; it hasn't run against a local perchlight-keys Worker, and the scoped issue/revoke token in perchlight-keys doesn't exist yet (TECH_DEBT.md).
