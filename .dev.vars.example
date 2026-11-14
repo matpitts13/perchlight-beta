@@ -1,0 +1,26 @@
+# Copy to .dev.vars for local development (`npm run dev`). Never commit .dev.vars.
+# In production, set each one with:  npx wrangler secret put <NAME>
+
+# Required. 16+ random characters (openssl rand -hex 32). Protects /api/*.
+ADMIN_TOKEN=
+
+# Required. 32+ random characters. Signs download links; derives invite and sign-in tokens and email lookups.
+LINK_SECRET=
+
+# Required. 32+ random characters. Signs session cookies and form CSRF values.
+SESSION_SECRET=
+
+# Required. 16+ random characters. Daily salt for the IP hashes used by rate limits (no IP is stored).
+IP_SALT=
+
+# Required for tester email. A Resend API key (sending access).
+RESEND_API_KEY=
+
+# Required. Turnstile secret key. For local testing use Cloudflare's test secret 1x0000000000000000000000000000000AA.
+TURNSTILE_SECRET_KEY=
+
+# Optional. Fine-grained GitHub token, Contents: read on the builds repository only.
+# GITHUB_TOKEN=
+
+# Optional. perchlight-keys token, used through the KEYS service binding.
+# KEYS_TOKEN=

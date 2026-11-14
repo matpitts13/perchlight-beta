@@ -1,0 +1,49 @@
+{
+  "name": "perchlight-beta",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A free, self-hosted private beta and advance-reader (ARC) portal on Cloudflare Workers + D1 + one small Durable Object. Applications, NDA log, signed per-tester downloads, feedback, reminders. No cron trigger.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "cloudflare": {
+    "bindings": {
+      "ADMIN_TOKEN": {
+        "description": "Required. A long random string (16+ characters), e.g. from `openssl rand -hex 32`. Protects the admin API (/api/*)."
+      },
+      "LINK_SECRET": {
+        "description": "Required. 32+ random characters. Signs download links and derives invite and sign-in tokens. Changing it breaks open invites and email lookups."
+      },
+      "SESSION_SECRET": {
+        "description": "Required. 32+ random characters. Signs tester session cookies and form CSRF values."
+      },
+      "IP_SALT": {
+        "description": "Required. 16+ random characters. Rate limits use an HMAC of the IP with a daily salt derived from it; no IP is stored."
+      },
+      "RESEND_API_KEY": {
+        "description": "Required for tester email (invites, sign-in links, reminders). A Resend API key with sending access."
+      },
+      "TURNSTILE_SECRET_KEY": {
+        "description": "Required. The Turnstile widget's secret key (the site key goes in TURNSTILE_SITE_KEY in wrangler.jsonc)."
+      },
+      "GITHUB_TOKEN": {
+        "description": "Optional. A fine-grained GitHub token with Contents: read on the builds repository only, for builds with source \"github\"."
+      },
+      "KEYS_TOKEN": {
+        "description": "Optional. perchlight-keys' token, for betas with \"keys\". Used only through a KEYS service binding (see README)."
+      }
+    }
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.6.1",
+    "vitest": "^5.1.0",
+    "wrangler": "^4.159.0"
+  }
+}

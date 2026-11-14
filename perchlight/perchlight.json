@@ -1,0 +1,152 @@
+{
+  "$schema": "https://perchlight.ravenburst.com/schema/v1.json",
+  "version": 1,
+  "views": [
+    {
+      "id": "beta-applications",
+      "title": "Applications",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "testers" },
+      "columns": [
+        { "label": "Name", "from": "name" },
+        { "label": "Email", "from": "email" },
+        { "label": "Beta", "from": "beta_id" },
+        { "label": "Status", "from": "status", "type": "enum", "options": ["applied", "waitlisted", "approved", "invited", "active", "declined", "blocked", "revoked", "withdrawn"] },
+        { "label": "Source", "from": "src" },
+        { "label": "Applied (UTC)", "from": "applied_at", "type": "date" },
+        { "label": "Note", "from": "note" },
+        { "label": "Answers", "from": "answers", "type": "json", "hidden": true },
+        { "label": "Action pending", "from": "action_requested", "hidden": true },
+        { "label": "Id", "from": "id", "hidden": true }
+      ],
+      "actions": [
+        { "label": "Approve", "set": { "action_requested": "approve" } },
+        { "label": "Decline", "confirm": true, "set": { "action_requested": "decline" } },
+        { "label": "Waitlist", "set": { "action_requested": "waitlist" } },
+        { "label": "Block", "confirm": true, "set": { "action_requested": "block" } }
+      ]
+    },
+    {
+      "id": "beta-testers",
+      "title": "Testers",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "testers" },
+      "columns": [
+        { "label": "Name", "from": "name" },
+        { "label": "Email", "from": "email" },
+        { "label": "Beta", "from": "beta_id" },
+        { "label": "Reader code", "from": "reader_code" },
+        { "label": "Status", "from": "status", "type": "enum", "options": ["applied", "waitlisted", "approved", "invited", "active", "declined", "blocked", "revoked", "withdrawn"] },
+        { "label": "Last seen (UTC day)", "from": "last_seen_day" },
+        { "label": "Terms version", "from": "terms_accepted_version" },
+        { "label": "Key", "from": "key_status", "type": "enum", "options": ["pending", "issued", "failed", "revoking", "revoked"] },
+        { "label": "Groups (comma-separated)", "from": "groups", "editable": true },
+        { "label": "Reminders off", "from": "reminders_off", "type": "boolean" },
+        { "label": "Activated (UTC)", "from": "activated_at", "type": "date", "hidden": true },
+        { "label": "Action pending", "from": "action_requested", "hidden": true },
+        { "label": "Id", "from": "id", "hidden": true }
+      ],
+      "actions": [
+        { "label": "Revoke", "confirm": true, "set": { "action_requested": "revoke" } },
+        { "label": "Re-send invite", "set": { "action_requested": "resend_invite" } }
+      ]
+    },
+    {
+      "id": "beta-builds",
+      "title": "Builds",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "builds" },
+      "columns": [
+        { "label": "Label", "from": "label" },
+        { "label": "Beta", "from": "beta_id" },
+        { "label": "Source", "from": "source", "type": "enum", "options": ["link", "github", "r2"] },
+        { "label": "Platform", "from": "platform" },
+        { "label": "Available (UTC)", "from": "available_at", "type": "date" },
+        { "label": "Expires (UTC)", "from": "expires_at", "type": "date" },
+        { "label": "Groups", "from": "groups" },
+        { "label": "Survey", "from": "survey_id" },
+        { "label": "From", "from": "origin", "type": "enum", "options": ["config", "api"] },
+        { "label": "Config error", "from": "config_error" },
+        { "label": "Target", "from": "target", "hidden": true },
+        { "label": "Id", "from": "id", "hidden": true }
+      ]
+    },
+    {
+      "id": "beta-downloads",
+      "title": "Downloads",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "downloads" },
+      "columns": [
+        { "label": "At (UTC)", "from": "at", "type": "date" },
+        { "label": "Tester", "from": "tester_id" },
+        { "label": "Build", "from": "build_id" },
+        { "label": "Source", "from": "source" },
+        { "label": "Result", "from": "result", "type": "enum", "options": ["started", "refused_invalid", "refused_limit", "refused_revoked", "refused_terms", "refused_unavailable", "upstream_error"] },
+        { "label": "Data centre", "from": "colo" }
+      ]
+    },
+    {
+      "id": "beta-feedback",
+      "title": "Feedback",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "responses" },
+      "columns": [
+        { "label": "Survey", "from": "survey_id" },
+        { "label": "Build", "from": "build_id" },
+        { "label": "Tester", "from": "tester_id" },
+        { "label": "Answers", "from": "answers", "type": "json" },
+        { "label": "Updated (UTC)", "from": "updated_at", "type": "date" }
+      ]
+    },
+    {
+      "id": "beta-bugs",
+      "title": "Bugs",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "bugs" },
+      "columns": [
+        { "label": "Title", "from": "title" },
+        { "label": "Beta", "from": "beta_id" },
+        { "label": "Build", "from": "build_id" },
+        { "label": "Severity", "from": "severity", "type": "enum", "options": ["low", "medium", "high", "critical"] },
+        { "label": "Status", "from": "status", "type": "enum", "options": ["new", "triaged", "fixed", "wontfix", "duplicate"] },
+        { "label": "Platform", "from": "platform" },
+        { "label": "Screenshots (GET /api/bugs/<id>/images/<n>)", "from": "images", "type": "number" },
+        { "label": "Screenshot note", "from": "images_note", "hidden": true },
+        { "label": "Details", "from": "body", "hidden": true },
+        { "label": "Reported (UTC)", "from": "created_at", "type": "date" },
+        { "label": "Id", "from": "id", "hidden": true }
+      ],
+      "actions": [
+        { "label": "Triaged", "set": { "action_requested": "triaged" } },
+        { "label": "Fixed", "set": { "action_requested": "fixed" } },
+        { "label": "Won't fix", "set": { "action_requested": "wontfix" } },
+        { "label": "Duplicate", "set": { "action_requested": "duplicate" } }
+      ]
+    },
+    {
+      "id": "beta-acceptances",
+      "title": "Acceptances",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "acceptances" },
+      "columns": [
+        { "label": "Accepted (UTC)", "from": "accepted_at", "type": "date" },
+        { "label": "Beta", "from": "beta_id" },
+        { "label": "Tester (blank after deletion)", "from": "tester_id" },
+        { "label": "Full name (blank after deletion)", "from": "full_name" },
+        { "label": "Version", "from": "version" },
+        { "label": "Text SHA-256", "from": "text_sha256" },
+        { "label": "How", "from": "how", "type": "enum", "options": ["invite", "re-accept"] },
+        { "label": "Removed after (UTC)", "from": "delete_after", "type": "date", "hidden": true }
+      ]
+    },
+    {
+      "id": "beta-email-queue",
+      "title": "Email queue",
+      "source": { "type": "d1", "database": "YOUR-D1-DATABASE-ID", "table": "deliveries" },
+      "columns": [
+        { "label": "Kind", "from": "kind", "type": "enum", "options": ["signin", "invite", "new_build", "reminder_invite", "reminder_survey", "reminder_ending", "key_issue", "key_revoke"] },
+        { "label": "Status", "from": "status", "type": "enum", "options": ["pending", "sending", "retry", "sent", "failed"] },
+        { "label": "Waiting for (UTC day)", "from": "not_before_day" },
+        { "label": "Attempts", "from": "attempts", "type": "number" },
+        { "label": "Last error", "from": "last_error" },
+        { "label": "Created (UTC)", "from": "created_at", "type": "date" },
+        { "label": "Sent (UTC)", "from": "sent_at", "type": "date" },
+        { "label": "Beta", "from": "beta_id", "hidden": true }
+      ],
+      "actions": [{ "label": "Try again", "set": { "action_requested": "retry" } }]
+    }
+  ]
+}

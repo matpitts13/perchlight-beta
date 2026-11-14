@@ -1,0 +1,58 @@
+// perchlight-beta: one Worker + D1 + one small Durable Object (Clock).
+// Secrets are never set here. Locally they go in .dev.vars (see .dev.vars.example);
+// in production: npx wrangler secret put <NAME>
+// Keep your own copy (database id, domain) in wrangler.mine.jsonc, which is
+// gitignored, and deploy with: npx wrangler deploy -c wrangler.mine.jsonc
+//
+// No cron trigger, on purpose: reminders, the email queue, invite expiry and
+// retention are all timed by the Clock Durable Object's alarm, which any
+// request or GET /tick re-arms if it ever stops (docs/SDD.md, "Clock").
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "perchlight-beta",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+
+  // Terms files (terms/*.md) are bundled as text.
+  "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "perchlight-beta",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Owner notices (new applications, bugs) to your own verified address
+  // (Email Routing > Destination addresses). Free; doesn't use Resend quota.
+  "send_email": [{ "name": "EMAIL" }],
+
+  // Durable Objects on the Free plan need the SQLite backend. One instance, "clock".
+  "durable_objects": {
+    "bindings": [{ "name": "CLOCK", "class_name": "Clock" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Clock"] }],
+
+  "vars": {
+    // This deployment's public URL, e.g. https://beta.example.com. Used in emails and
+    // for the Origin check on every form. Required.
+    "PUBLIC_URL": "",
+    // The sender for tester email (a domain verified in Resend), e.g. "Hollow Lantern <beta@example.com>".
+    "MAIL_FROM": "",
+    // Your verified Email Routing destination address, for owner notices.
+    "OWNER_EMAIL": "",
+    // The Turnstile widget's site key (the secret key is a secret).
+    "TURNSTILE_SITE_KEY": ""
+  }
+
+  // OPTIONAL: R2 for builds with "source": "r2" or "screenshots": { "store": "r2" }.
+  // R2 asks for a payment method before the first bucket (docs/SDD.md, "Couldn't verify").
+  // "r2_buckets": [{ "binding": "FILES", "bucket_name": "perchlight-beta-files" }]
+
+  // OPTIONAL: perchlight-keys for betas with "keys" (a service binding is required; README).
+  // "services": [{ "binding": "KEYS", "service": "perchlight-keys" }]
+
+  // Your own domain, once it works on workers.dev:
+  // "routes": [{ "pattern": "beta.example.com", "custom_domain": true }]
+}

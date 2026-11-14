@@ -1,0 +1,34 @@
+{
+  "betas": {
+    "hollow-lantern": {
+      "name": "Hollow Lantern closed beta",
+      "type": "game",
+      "status": "draft",
+      "maxTesters": 150,
+      "endsAt": "2027-01-31",
+      "sources": ["list", "discord", "site"],
+      "questions": [
+        { "id": "platform", "type": "multi", "label": "What will you play on?", "options": ["Windows", "Steam Deck", "macOS"], "required": true },
+        { "id": "hours", "type": "choice", "label": "Hours a week for testing", "options": ["<2", "2-5", "5+"] },
+        { "id": "why", "type": "longtext", "label": "What do you like in roguelikes?", "max": 1000 }
+      ],
+      "terms": { "file": "terms/hollow-lantern-nda.md", "version": "2026-11-01" },
+      "reminders": { "unclaimedInvite": 5, "newBuild": true, "surveyNudge": 3, "endingSoon": 3 },
+      "retention": { "declinedDays": 30, "afterCloseDays": 180, "acceptanceDays": 730 }
+    },
+    "salt-and-ash-arc": {
+      "name": "Salt & Ash ARC",
+      "type": "book",
+      "status": "draft",
+      "terms": { "file": "terms/arc.md", "version": "1" }
+    }
+  },
+  "builds": {
+    "hl-steam": { "beta": "hollow-lantern", "label": "Steam playtest", "source": "link", "url": "https://store.steampowered.com/" }
+  },
+  "surveys": {
+    "hl-0.4": { "questions": [{ "id": "fun", "type": "rating", "label": "How fun was 0.4?", "required": true }] }
+  },
+  "email": { "dailyCap": 90, "monthlyCap": 2800 },
+  "screenshots": { "store": "d1", "maxBytes": "400KB", "perBug": 2, "totalCap": "150MB" }
+}
