@@ -19,3 +19,9 @@
 - **`announced = 1` is set for every build** (`src/clock.js` reminders), including ones with a config error or in a beta with newBuild off; a build fixed later is never announced.
 - **D1 BLOB binding of a `Uint8Array`** is verified only in Miniflare (`src/routes/tester.js`). Confirm on real D1.
 - **D1 statements per invocation aren't counted separately** from subrequests (batches count as one). The config sync is chunked to 20 statements a run and decisions chunk at 90 ids; a very large `decide` of 200 app actions in one run can still mean many statements.
+
+## From the focused re-review of f8800b7 (all LOW)
+
+- `src/clock.js` (step error handling): any failing step applies the 5-60 min back-off to the whole run, so a persistently failing non-critical step (e.g. housekeeping) slows email draining to one run per hour and clears `leftover`. Sign-in/approve `wake()` still override it. Fix: keep a separate failure counter for non-email steps.
+- `src/lib/config.js` (`dailyCap + signinReserve` check): over 100 only warns; it should clamp or reject.
+- Not covered by the re-review: the `testers.js` approval-order change.
